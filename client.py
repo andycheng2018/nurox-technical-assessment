@@ -1,6 +1,7 @@
 from ollama import Client
 import time
 import ollama
+import httpx
 
 SERVER_URL = 'http://127.0.0.1:11434'
 client = Client(host=SERVER_URL, timeout = 10.0)
@@ -25,7 +26,14 @@ latency = []
 # ERROR MANAGMENT
 ENABLE_SERVER_ERROR = False
 
-def ask(question):
+def reply(response):
+    # To simplify things, treat print as a TTS reply
+    print(response.strip())
+
+# Added func here, a callback function so we can easily change what we want Alva
+# to do with the response like speak it or print it
+# Added cancel callback to give ROS 2 an option to interrupt LLM gen
+def ask(question, func=reply, cancel=lambda: False):
     stream = None
     try:
         if ENABLE_SERVER_ERROR:
@@ -54,7 +62,7 @@ def ask(question):
                 time_to_first_token = time.perf_counter() - start
 
             # Apply barge in    
-            if BARGE_IN and barge_in(start):
+            if cancel() or (BARGE_IN and barge_in(start)):
                 stream.close()
                 return
 
@@ -64,7 +72,7 @@ def ask(question):
             if response.endswith(('.', '?', '!')):
                 if time_to_first_speakable_chunk is None:
                     time_to_first_speakable_chunk = time.perf_counter() - start
-                reply(response)
+                func(response)
                 # reset result
                 response = ''
             # If we exceed MAX_QUESTION_LENGTH, we need to split the sentence into multiple pieces
@@ -73,7 +81,7 @@ def ask(question):
                 if time_to_first_speakable_chunk is None:
                     time_to_first_speakable_chunk = time.perf_counter() - start
                 # Reply for first half
-                reply(' '.join(words[:MAX_QUESTION_LENGTH]))
+                func(' '.join(words[:MAX_QUESTION_LENGTH]))
                 # Store the second half for future chunks
                 response = ' '.join(words[MAX_QUESTION_LENGTH:])
 
@@ -81,7 +89,7 @@ def ask(question):
         if response.strip():
             if time_to_first_speakable_chunk is None:
                 time_to_first_speakable_chunk = time.perf_counter() - start
-            reply(response)
+            func(response)
 
         print(f"TIME TO FIRST TOKEN: {time_to_first_token}")
         print(f"TIME TO FIRST SPEAKABLE CHUNK: {time_to_first_speakable_chunk}")
@@ -89,22 +97,18 @@ def ask(question):
     except ollama.ResponseError as e:
         # reply is for Alva to speak about the error
         # print is for developers to see error code
-        reply("ERROR: PLEASE CONTACT SUPPORT, SERVERS ARE DOWN!")
+        func("ERROR: PLEASE CONTACT SUPPORT, SERVERS ARE DOWN!")
         print('Server Error:', e.status_code)
-    except TimeoutError as e:
-        reply("ERROR: PLEASE CONTACT SUPPORT, SERVER TIMEOUT!")
+    except httpx.TimeoutException as e:
+        func("ERROR: PLEASE CONTACT SUPPORT, SERVER TIMEOUT!")
         print('Timeout:', e)
-    except ConnectionError as e:
-        reply("ERROR: PLEASE CONTACT SUPPORT, CONNECTION ERROR!")
+    except httpx.ConnectError as e:
+        func("ERROR: PLEASE CONTACT SUPPORT, CONNECTION ERROR!")
         print('Connection Error:', e)
     finally:
         # make sure the stream closes at the end
         if stream is not None:
             stream.close()
-        
-def reply(response):
-    # To simplify things, treat print as a TTS reply
-    print(response.strip())
 
 def barge_in(start):
     # Interruption Simulation
